@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Review {{ record.message_meta.record_id }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f6f7fb; color: #222; }
+    .container { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1.25rem; }
+    .panel { background: #fff; border-radius: 12px; padding: 1rem 1.2rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    textarea, input, select { width: 100%; padding: 0.55rem; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.5rem; border-bottom: 1px solid #eee; vertical-align: top; }
+    .btn-row { margin-top: 1rem; display: flex; gap: 0.7rem; }
+    button { padding: 0.65rem 1rem; border: 0; border-radius: 8px; cursor: pointer; }
+    .approve { background: #1f7a1f; color: white; }
+    .reject { background: #b02a2a; color: white; }
+    .save { background: #333; color: white; }
+    .back { display:inline-block; margin-bottom: 1rem; text-decoration:none; color:#333; }
+  </style>
+</head>
+<body>
+  <a class="back" href="{{ url_for('index') }}">← Back to queue</a>
+  <h1>Review order</h1>
+  <p><strong>Record:</strong> {{ record.message_meta.record_id }} · <strong>Group:</strong> {{ record.message_meta.group_name or 'Unknown Group' }}</p>
+
+  <form method="post">
+    <div class="container">
+      <div class="panel">
+        <h2>Raw message</h2>
+        <label>Customer</label>
+        <input type="text" name="customer" value="{{ record.parse_result.customer or '' }}" />
+        <br /><br />
+        <label>Raw message text</label>
+        <textarea name="raw_message" rows="18">{{ record.parse_result.raw_message }}</textarea>
+      </div>
+
+      <div class="panel">
+        <h2>Parsed line items</h2>
+        <input type="hidden" name="row_count" value="{{ record.parse_result['items']|length }}" />
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Qty</th>
+              <th>Unit</th>
+              <th>Weight</th>
+              <th>Price</th>
+              <th>Raw line</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in record.parse_result['items'] %}
+            <tr>
+              <td><input type="text" name="item_{{ loop.index0 }}" value="{{ item.item }}" /></td>
+              <td><input type="text" name="quantity_{{ loop.index0 }}" value="{{ item.quantity if item.quantity is not none else '' }}" /></td>
+              <td>
+                <select name="unit_{{ loop.index0 }}">
+                  {% for unit in ['CTN','BAG','BOX','PKT','PCS','KG','JAR'] %}
+                  <option value="{{ unit }}" {% if item.unit == unit %}selected{% endif %}>{{ unit }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td><input type="text" name="weight_{{ loop.index0 }}" value="{{ item.weight or '' }}" /></td>
+              <td><input type="text" name="price_{{ loop.index0 }}" value="{{ item.price if item.price is not none else '' }}" /></td>
+              <td><input type="text" name="raw_line_{{ loop.index0 }}" value="{{ item.raw_line }}" /></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="btn-row">
+          <button class="save" name="action" value="save">Save draft</button>
+          <button class="approve" name="action" value="approve">Approve</button>
+          <button class="reject" name="action" value="reject">Reject</button>
+        </div>
+      </div>
+    </div>
+  </form>
+</body>
+</html>

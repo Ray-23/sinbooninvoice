@@ -1,0 +1,30 @@
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+listener/node_modules/
+npm-debug.log*
+
+# WhatsApp local session/auth state
+listener/auth_info_baileys/
+
+# Generated runtime data
+data/logs/
+data/incoming/
+data/approved/
+data/rejected/

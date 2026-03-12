@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order Bot Review Queue</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f7f7; color: #222; }
+    .card { background: #fff; border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    .meta { color: #666; font-size: 0.92rem; }
+    .btn { display: inline-block; padding: 0.55rem 0.9rem; border-radius: 8px; text-decoration: none; background: #222; color: #fff; }
+    .tag { display:inline-block; padding: 0.2rem 0.55rem; border-radius: 999px; background: #eee; font-size: 0.8rem; margin-right: 0.4rem; }
+    pre { white-space: pre-wrap; background: #fafafa; padding: 0.75rem; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Pending Order Reviews</h1>
+  <p>{{ queue|length }} pending message(s)</p>
+
+  {% if queue %}
+    {% for record in queue %}
+      <div class="card">
+        <div><strong>{{ record.message_meta.group_name or 'Unknown Group' }}</strong></div>
+        <div class="meta">Record: {{ record.message_meta.record_id }} · Sender: {{ record.message_meta.sender or 'Unknown' }} · Received: {{ record.message_meta.received_at }}</div>
+        <p>
+          <span class="tag">Customer: {{ record.parse_result.customer or 'Not detected' }}</span>
+          <span class="tag">Items: {{ record.parse_result.stats.item_count }}</span>
+          <span class="tag">Status: {{ record.parse_result.status }}</span>
+        </p>
+        <pre>{{ record.parse_result.raw_message }}</pre>
+        <a class="btn" href="{{ url_for('review', record_id=record.message_meta.record_id) }}">Open review</a>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="card">
+      <p>No pending messages yet. Use parser test mode or the WhatsApp listener to create incoming records.</p>
+    </div>
+  {% endif %}
+</body>
+</html>

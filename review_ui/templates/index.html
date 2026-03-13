@@ -20,7 +20,7 @@
     .status-note { color: #4f5d75; font-size: 0.9rem; margin-bottom: 1rem; }
   </style>
 </head>
-<body data-dashboard-fingerprint="{{ dashboard_fingerprint }}">
+<body>
   <h1>Order Review Dashboard</h1>
   <p>{{ queue|length }} pending message(s)</p>
   <p class="status-note">Auto-refresh on · checks for backend changes every 2 seconds</p>
@@ -86,9 +86,13 @@
   </div>
 
   <script>
+    const initialDashboardFingerprint = {{ dashboard_fingerprint|tojson }};
+    const dashboardStateUrl = {{ url_for('dashboard_state_api')|tojson }};
+  </script>
+
+  <script>
     (() => {
-      const dashboardFingerprint = document.body.dataset.dashboardFingerprint || '';
-      let currentFingerprint = dashboardFingerprint;
+      let currentFingerprint = initialDashboardFingerprint || '';
       let pollHandle = null;
       let requestInFlight = false;
 
@@ -99,7 +103,7 @@
 
         requestInFlight = true;
         try {
-          const response = await fetch('/api/dashboard_state', {
+          const response = await fetch(dashboardStateUrl, {
             cache: 'no-store',
             headers: { 'Accept': 'application/json' },
           });
@@ -146,6 +150,7 @@
       });
 
       startPolling();
+      void pollDashboardState();
     })();
   </script>
 </body>

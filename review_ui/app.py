@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 import sys
@@ -8,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -88,6 +89,60 @@ def get_record(record_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def latest_record_state(folder: Path, *, timestamp_field: str) -> Dict[str, Optional[str]]:
+    json_files = list(folder.glob('*.json'))
+    if not json_files:
+        return {'record_id': None, 'timestamp': None, 'mtime_ns': None}
+
+    latest_path = max(json_files, key=lambda path: path.stat().st_mtime_ns)
+    latest_mtime_ns = str(latest_path.stat().st_mtime_ns)
+    record_id = latest_path.stem
+    timestamp = None
+
+    try:
+        record = read_json(latest_path)
+        record_id = record.get('message_meta', {}).get('record_id') or record_id
+        timestamp = record.get(timestamp_field) or record.get('message_meta', {}).get('received_at')
+    except Exception:
+        pass
+
+    return {
+        'record_id': record_id,
+        'timestamp': timestamp,
+        'mtime_ns': latest_mtime_ns,
+    }
+
+
+def build_dashboard_state() -> Dict[str, Any]:
+    pending_state = [
+        {
+            'record_id': path.stem,
+            'mtime_ns': str(path.stat().st_mtime_ns),
+        }
+        for path in pending_files()
+    ]
+    latest_pending_id = pending_state[-1]['record_id'] if pending_state else None
+    latest_approved = latest_record_state(APPROVED_DIR, timestamp_field='approved_at')
+    latest_rejected = latest_record_state(REJECTED_DIR, timestamp_field='rejected_at')
+
+    fingerprint_source = {
+        'pending': pending_state,
+        'approved': latest_approved,
+        'rejected': latest_rejected,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_source, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+
+    return {
+        'fingerprint': fingerprint,
+        'queue_count': len(pending_state),
+        'latest_pending_id': latest_pending_id,
+        'latest_approved_id': latest_approved['record_id'],
+        'latest_rejected_id': latest_rejected['record_id'],
+    }
+
+
 def update_from_form(record: Dict[str, Any], form_data) -> Dict[str, Any]:
     customer = form_data.get('customer', '').strip() or None
     parse_result = record['parse_result']
@@ -165,6 +220,7 @@ def append_decision_log(record: Dict[str, Any], decision: str) -> None:
 
 @app.route('/')
 def index():
+    dashboard_state = build_dashboard_state()
     queue = [enrich_record_with_prices(read_json(path)) for path in pending_files()]
     approved_history = load_history_records(APPROVED_DIR, timestamp_field='approved_at', limit=10)
     rejected_history = load_history_records(REJECTED_DIR, timestamp_field='rejected_at', limit=10)
@@ -173,7 +229,14 @@ def index():
         queue=queue,
         approved_history=approved_history,
         rejected_history=rejected_history,
+        dashboard_state=dashboard_state,
+        dashboard_fingerprint=dashboard_state['fingerprint'],
     )
+
+
+@app.route('/api/dashboard_state')
+def dashboard_state_api():
+    return jsonify(build_dashboard_state())
 
 
 @app.route('/review/<record_id>', methods=['GET', 'POST'])

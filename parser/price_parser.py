@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,6 +13,7 @@ PRICE_DATA_DIR = DATA_DIR / 'prices'
 PRICE_RAW_DIR = PRICE_DATA_DIR / 'raw'
 PRICE_HISTORY_DIR = PRICE_DATA_DIR / 'history'
 LATEST_PRICES_PATH = PRICE_DATA_DIR / 'latest_prices.json'
+FUZZY_MATCH_THRESHOLD = 0.86
 
 DATE_LINE_RE = re.compile(r'^\s*(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?')
 PRICE_RE = re.compile(r'(?:\$|rm\s*)(\d+(?:\.\d{1,2})?)(?:\s*/\s*([a-zA-Z]+))?\.?', re.IGNORECASE)
@@ -62,6 +64,52 @@ def normalize_pack_text(pack_text: Optional[str]) -> Optional[str]:
     if not pack_text:
         return None
     return re.sub(r'\s+', '', pack_text.strip().lower().rstrip('.'))
+
+
+def similarity_ratio(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+
+    left_compact = left.replace(' ', '')
+    right_compact = right.replace(' ', '')
+    scores = [SequenceMatcher(None, left, right).ratio()]
+    if left_compact != left or right_compact != right:
+        scores.append(SequenceMatcher(None, left_compact, right_compact).ratio())
+    return max(scores)
+
+
+def pack_score_adjustment(order_weight: Optional[str], entry_pack: Optional[str]) -> float:
+    if order_weight and entry_pack:
+        return 0.04 if order_weight == entry_pack else -0.10
+    if order_weight and not entry_pack:
+        return -0.02
+    if entry_pack and not order_weight:
+        return -0.04
+    return 0.0
+
+
+def basis_score_adjustment(order_unit: str, entry_basis: str) -> float:
+    if order_unit and entry_basis:
+        return 0.02 if order_unit == entry_basis else -0.05
+    return 0.0
+
+
+def clamp_confidence(score: float) -> float:
+    return round(max(0.0, min(score, 1.0)), 2)
+
+
+def exact_match_confidence(order_weight: Optional[str], order_unit: str, entry_pack: Optional[str], entry_basis: str) -> float:
+    score = 0.97
+    score += pack_score_adjustment(order_weight, entry_pack)
+    score += basis_score_adjustment(order_unit, entry_basis)
+    return clamp_confidence(score)
+
+
+def fuzzy_match_confidence(base_similarity: float, order_weight: Optional[str], order_unit: str, entry_pack: Optional[str], entry_basis: str) -> float:
+    score = base_similarity
+    score += pack_score_adjustment(order_weight, entry_pack) * 0.5
+    score += basis_score_adjustment(order_unit, entry_basis) * 0.5
+    return clamp_confidence(score)
 
 
 def parse_effective_price_date(header_line: str, received_at: str) -> str:
@@ -205,32 +253,46 @@ def find_reference_match(item_row: Dict[str, Any], catalog: Dict[str, Any]) -> T
 
     order_weight = normalize_pack_text(item_row.get('weight'))
     order_unit = str(item_row.get('unit') or '').strip().upper()
+    exact_candidates: List[Tuple[float, Dict[str, Any]]] = []
+    fuzzy_candidates: List[Tuple[float, Dict[str, Any]]] = []
 
-    best_match: Optional[Dict[str, Any]] = None
-    best_score = -1.0
     for entry in catalog.get('items', []):
-        entry_key = canonical_item_key(entry.get('normalized_item') or entry.get('item_name'))
-        if entry_key != order_key:
+        entry_name = str(entry.get('normalized_item') or entry.get('item_name') or '').strip()
+        normalized_entry_name = normalize_alias(entry_name, item_aliases) or entry_name
+        entry_key = canonical_item_key(normalized_entry_name)
+        if not entry_key:
             continue
 
-        score = 0.9
         entry_pack = normalize_pack_text(entry.get('pack_text'))
         entry_basis = str(entry.get('price_basis') or '').strip().upper()
 
-        if entry_pack and order_weight:
-            score = 1.0 if entry_pack == order_weight else 0.82
-        elif entry_pack and not order_weight:
-            score = 0.88
-        elif entry_basis and order_unit and entry_basis == order_unit:
-            score = 0.95
+        if entry_key == order_key:
+            exact_candidates.append((exact_match_confidence(order_weight, order_unit, entry_pack, entry_basis), entry))
+            continue
 
-        if score > best_score:
-            best_match = entry
-            best_score = score
+        base_similarity = similarity_ratio(order_key, entry_key)
+        if base_similarity < FUZZY_MATCH_THRESHOLD:
+            continue
 
-    if best_match is None:
+        confidence = fuzzy_match_confidence(base_similarity, order_weight, order_unit, entry_pack, entry_basis)
+        if confidence < FUZZY_MATCH_THRESHOLD:
+            continue
+        fuzzy_candidates.append((confidence, entry))
+
+    candidates = exact_candidates or fuzzy_candidates
+    if not candidates:
         return None, None
-    return best_match, round(best_score, 2)
+
+    best_score, best_match = max(
+        candidates,
+        key=lambda pair: (
+            pair[0],
+            str(pair[1].get('effective_price_date') or ''),
+            str(pair[1].get('received_at') or ''),
+            str(pair[1].get('normalized_item') or pair[1].get('item_name') or ''),
+        ),
+    )
+    return best_match, best_score
 
 
 def apply_reference_prices(items: List[Dict[str, Any]], catalog: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -241,7 +303,7 @@ def apply_reference_prices(items: List[Dict[str, Any]], catalog: Optional[Dict[s
             item['reference_price'] = match['reference_price']
             item['reference_price_basis'] = match['price_basis']
             item['reference_price_date'] = match['effective_price_date']
-            item['reference_price_item'] = match['normalized_item']
+            item['reference_price_item'] = match.get('normalized_item') or match.get('item_name')
             item['price_match_confidence'] = confidence
             if item.get('price') in (None, ''):
                 item['price'] = match['reference_price']

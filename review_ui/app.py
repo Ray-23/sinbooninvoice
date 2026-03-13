@@ -155,6 +155,7 @@ def build_price_state() -> Dict[str, Optional[str]]:
         'latest_price_effective_date': latest_catalog.get('effective_price_date') or latest_history_effective_date,
         'latest_price_record_id': latest_catalog.get('record_id'),
         'latest_price_sender': latest_catalog.get('sender'),
+        'active_catalog_item_count': len(latest_catalog.get('items', [])),
     }
 
 

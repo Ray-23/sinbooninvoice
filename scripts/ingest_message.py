@@ -19,11 +19,9 @@ from parser.price_parser import (  # noqa: E402
     PRICE_HISTORY_DIR,
     PRICE_RAW_DIR,
     apply_reference_prices,
-    build_latest_catalog,
     ensure_price_directories,
-    load_latest_catalog,
     parse_price_message,
-    should_replace_latest_catalog,
+    rebuild_latest_catalog,
 )
 
 DATA_DIR = ROOT / 'data'
@@ -89,14 +87,10 @@ def save_price_history(record: dict) -> Path:
     return path
 
 
-def update_latest_price_catalog(record: dict) -> tuple[Path, bool]:
+def update_latest_price_catalog() -> tuple[Path, dict]:
     ensure_price_directories()
-    latest_catalog = build_latest_catalog(record)
-    current_catalog = load_latest_catalog()
-    should_update = should_replace_latest_catalog(latest_catalog, current_catalog)
-    if should_update:
-        LATEST_PRICES_PATH.write_text(json.dumps(latest_catalog, indent=2, ensure_ascii=False), encoding='utf-8')
-    return LATEST_PRICES_PATH, should_update
+    latest_catalog = rebuild_latest_catalog()
+    return LATEST_PRICES_PATH, latest_catalog
 
 
 def ingest_order_message(args, raw: str, received_at: str) -> dict:
@@ -154,9 +148,9 @@ def ingest_price_message(args, raw: str, received_at: str) -> dict:
 
     raw_path = save_price_raw(record_id, raw)
     history_path = save_price_history(record)
-    latest_catalog_path, latest_updated = update_latest_price_catalog(record)
+    latest_catalog_path, latest_catalog = update_latest_price_catalog()
     logger.info(
-        'received_price_message record_id=%s source=%s group=%s sender=%s status=%s item_count=%s effective_date=%s latest_updated=%s',
+        'received_price_message record_id=%s source=%s group=%s sender=%s status=%s item_count=%s effective_date=%s active_catalog_items=%s',
         record_id,
         args.source,
         args.group_name,
@@ -164,7 +158,7 @@ def ingest_price_message(args, raw: str, received_at: str) -> dict:
         result['status'],
         result['stats']['item_count'],
         result['effective_price_date'],
-        latest_updated,
+        latest_catalog.get('item_count', 0),
     )
     return {
         'ok': True,
@@ -173,7 +167,8 @@ def ingest_price_message(args, raw: str, received_at: str) -> dict:
         'saved_raw_to': str(raw_path),
         'saved_history_to': str(history_path),
         'latest_catalog_path': str(latest_catalog_path),
-        'latest_catalog_updated': latest_updated,
+        'latest_catalog_updated': True,
+        'active_catalog_item_count': latest_catalog.get('item_count', 0),
         'effective_price_date': result['effective_price_date'],
     }
 

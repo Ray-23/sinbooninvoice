@@ -290,43 +290,139 @@ def parse_price_message(raw_message: str, received_at: str) -> Dict[str, Any]:
     }
 
 
-def build_latest_catalog(record: Dict[str, Any]) -> Dict[str, Any]:
-    price_result = record['price_result']
+def price_record_effective_date(record: Dict[str, Any]) -> str:
+    return str(record.get('price_result', {}).get('effective_price_date') or '')
+
+
+def price_record_received_at(record: Dict[str, Any]) -> str:
+    return str(record.get('message_meta', {}).get('received_at') or '')
+
+
+def load_price_history_records() -> List[Dict[str, Any]]:
+    if not PRICE_HISTORY_DIR.exists():
+        return []
+
+    records: List[Dict[str, Any]] = []
+    for path in PRICE_HISTORY_DIR.glob('*.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        record['_history_path'] = str(path)
+        records.append(record)
+    return records
+
+
+def build_price_variant_key(entry: Dict[str, Any], item_aliases: Dict[str, str]) -> str:
+    entry_name = str(entry.get('normalized_item') or entry.get('item_name') or '').strip()
+    normalized_entry_name = normalize_alias(entry_name, item_aliases) or entry_name
+    canonical_name = canonical_item_key(normalized_entry_name)
+    pack_text = normalize_pack_text(entry.get('pack_text')) or ''
+    price_basis = str(entry.get('price_basis') or '').strip().upper() or 'CTN'
+    return f'{canonical_name}|{pack_text}|{price_basis}'
+
+
+def build_latest_catalog(history_records: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    ensure_price_directories()
+    records = history_records if history_records is not None else load_price_history_records()
+    valid_records = [record for record in records if price_record_effective_date(record)]
+    if not valid_records:
+        return {}
+
+    active_effective_date = max(price_record_effective_date(record) for record in valid_records)
+    active_records = [record for record in valid_records if price_record_effective_date(record) == active_effective_date]
+    active_records.sort(
+        key=lambda record: (
+            price_record_received_at(record),
+            str(record.get('message_meta', {}).get('record_id') or ''),
+        )
+    )
+
+    _, item_aliases = load_mappings()
+    merged_variants: Dict[str, Dict[str, Any]] = {}
+    active_record_ids: List[str] = []
+    active_history_files: List[str] = []
+
+    for record in active_records:
+        message_meta = record.get('message_meta', {})
+        price_result = record.get('price_result', {})
+        record_id = str(message_meta.get('record_id') or '')
+        if record_id:
+            active_record_ids.append(record_id)
+            active_history_files.append(str(PRICE_HISTORY_DIR / f'{record_id}.json'))
+
+        for item in price_result.get('items', []):
+            variant_key = build_price_variant_key(item, item_aliases)
+            if not variant_key:
+                continue
+
+            merged_item = dict(item)
+            merged_item['normalized_item'] = normalize_alias(
+                str(item.get('normalized_item') or item.get('item_name') or '').strip(),
+                item_aliases,
+            ) or str(item.get('normalized_item') or item.get('item_name') or '').strip()
+            merged_item['pack_text'] = normalize_pack_text(item.get('pack_text'))
+            merged_item['price_basis'] = str(item.get('price_basis') or '').strip().upper() or 'CTN'
+            merged_item['variant_key'] = variant_key
+            merged_item['source_record_id'] = record_id or None
+            merged_item['source_received_at'] = price_record_received_at(record) or None
+            merged_item['source_sender'] = message_meta.get('sender')
+            merged_item['source_group_name'] = message_meta.get('group_name')
+
+            existing = merged_variants.get(variant_key)
+            existing_received_at = str(existing.get('received_at') or existing.get('source_received_at') or '') if existing else ''
+            candidate_received_at = str(merged_item.get('received_at') or merged_item.get('source_received_at') or '')
+            if not existing or candidate_received_at >= existing_received_at:
+                merged_variants[variant_key] = merged_item
+
+    latest_record = active_records[-1]
+    latest_meta = latest_record.get('message_meta', {})
+    latest_result = latest_record.get('price_result', {})
+    merged_items = sorted(
+        merged_variants.values(),
+        key=lambda item: (
+            canonical_item_key(item.get('normalized_item') or item.get('item_name')),
+            normalize_pack_text(item.get('pack_text')) or '',
+            str(item.get('price_basis') or '').strip().upper(),
+        ),
+    )
+
+    latest_record_id = latest_meta.get('record_id')
     return {
-        'record_id': record['message_meta']['record_id'],
-        'group_name': record['message_meta'].get('group_name'),
-        'sender': record['message_meta'].get('sender'),
-        'message_id': record['message_meta'].get('message_id'),
-        'received_at': record['message_meta']['received_at'],
-        'effective_price_date': price_result['effective_price_date'],
-        'header_line': price_result['header_line'],
-        'raw_text_path': str(PRICE_RAW_DIR / f"{record['message_meta']['record_id']}.txt"),
-        'history_path': str(PRICE_HISTORY_DIR / f"{record['message_meta']['record_id']}.json"),
-        'items': price_result['items'],
+        'record_id': latest_record_id,
+        'group_name': latest_meta.get('group_name'),
+        'sender': latest_meta.get('sender'),
+        'message_id': latest_meta.get('message_id'),
+        'received_at': latest_meta.get('received_at'),
+        'effective_price_date': active_effective_date,
+        'header_line': latest_result.get('header_line'),
+        'raw_text_path': str(PRICE_RAW_DIR / f'{latest_record_id}.txt') if latest_record_id else None,
+        'history_path': str(PRICE_HISTORY_DIR / f'{latest_record_id}.json') if latest_record_id else None,
+        'active_history_files': active_history_files,
+        'active_record_ids': active_record_ids,
+        'source_message_count': len(active_records),
+        'item_count': len(merged_items),
+        'items': merged_items,
     }
+
+
+def rebuild_latest_catalog() -> Dict[str, Any]:
+    ensure_price_directories()
+    latest_catalog = build_latest_catalog()
+    LATEST_PRICES_PATH.write_text(json.dumps(latest_catalog, indent=2, ensure_ascii=False), encoding='utf-8')
+    return latest_catalog
 
 
 def load_latest_catalog() -> Dict[str, Any]:
     if not LATEST_PRICES_PATH.exists():
-        return {}
+        return rebuild_latest_catalog()
     try:
-        return json.loads(LATEST_PRICES_PATH.read_text(encoding='utf-8'))
+        catalog = json.loads(LATEST_PRICES_PATH.read_text(encoding='utf-8'))
     except Exception:
-        return {}
-
-
-def should_replace_latest_catalog(candidate: Dict[str, Any], current: Dict[str, Any]) -> bool:
-    if not current:
-        return True
-
-    candidate_date = candidate.get('effective_price_date') or ''
-    current_date = current.get('effective_price_date') or ''
-    if candidate_date != current_date:
-        return candidate_date > current_date
-
-    candidate_received = candidate.get('received_at') or ''
-    current_received = current.get('received_at') or ''
-    return candidate_received > current_received
+        return rebuild_latest_catalog()
+    if catalog and 'active_record_ids' not in catalog:
+        return rebuild_latest_catalog()
+    return catalog
 
 
 def find_reference_match(item_row: Dict[str, Any], catalog: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:

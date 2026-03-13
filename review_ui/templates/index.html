@@ -59,6 +59,7 @@
           <div class="price-grid">
             <div><strong>Snapshot file:</strong> {{ price_summary.latest_price_history_file }}</div>
             <div class="meta"><strong>Effective price date:</strong> {{ price_summary.latest_price_effective_date or 'Unknown' }}</div>
+            <div class="meta"><strong>Active catalog items:</strong> {{ price_summary.active_catalog_item_count or 0 }}</div>
             <div class="meta"><strong>Last modified:</strong> {{ price_summary.latest_price_history_modified_at or price_summary.latest_prices_modified_at or 'Unknown' }}</div>
             <div class="meta"><strong>Catalog updated:</strong> {{ price_summary.latest_prices_modified_at or 'Not yet built' }}</div>
           </div>

@@ -18,6 +18,7 @@
     .section-label { color: #637083; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.78rem; }
     .history-card { border-top: 1px solid #ececec; padding-top: 0.8rem; margin-top: 0.8rem; }
     .status-note { color: #4f5d75; font-size: 0.9rem; margin-bottom: 1rem; }
+    .price-grid { display: grid; gap: 0.45rem; margin-top: 0.8rem; }
   </style>
 </head>
 <body>
@@ -51,6 +52,21 @@
     </div>
 
     <div class="stack">
+      <div class="panel">
+        <div class="section-label">Prices</div>
+        <h2>Latest Price Update</h2>
+        {% if price_summary.latest_price_history_file %}
+          <div class="price-grid">
+            <div><strong>Snapshot file:</strong> {{ price_summary.latest_price_history_file }}</div>
+            <div class="meta"><strong>Effective price date:</strong> {{ price_summary.latest_price_effective_date or 'Unknown' }}</div>
+            <div class="meta"><strong>Last modified:</strong> {{ price_summary.latest_price_history_modified_at or price_summary.latest_prices_modified_at or 'Unknown' }}</div>
+            <div class="meta"><strong>Catalog updated:</strong> {{ price_summary.latest_prices_modified_at or 'Not yet built' }}</div>
+          </div>
+        {% else %}
+          <p class="meta">No price snapshots yet. Send a message to the price group to build the latest catalog.</p>
+        {% endif %}
+      </div>
+
       <div class="panel">
         <div class="section-label">History</div>
         <h2>Latest 10 Approved</h2>

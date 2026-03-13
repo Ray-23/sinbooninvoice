@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from parser.price_parser import apply_reference_prices, load_latest_catalog  # noqa: E402
+from parser.price_parser import (  # noqa: E402
+    LATEST_PRICES_PATH,
+    PRICE_HISTORY_DIR,
+    apply_reference_prices,
+    load_latest_catalog,
+)
 
 DATA_DIR = ROOT / 'data'
 INCOMING_DIR = DATA_DIR / 'incoming'
@@ -113,6 +118,46 @@ def latest_record_state(folder: Path, *, timestamp_field: str) -> Dict[str, Opti
     }
 
 
+def format_file_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec='seconds')
+
+
+def build_price_state() -> Dict[str, Optional[str]]:
+    latest_catalog = load_latest_catalog()
+    latest_prices_mtime_ns = None
+    latest_prices_modified_at = None
+    if LATEST_PRICES_PATH.exists():
+        latest_prices_mtime_ns = str(LATEST_PRICES_PATH.stat().st_mtime_ns)
+        latest_prices_modified_at = format_file_mtime(LATEST_PRICES_PATH)
+
+    latest_history_file = None
+    latest_history_mtime_ns = None
+    latest_history_modified_at = None
+    latest_history_effective_date = None
+    history_files = list(PRICE_HISTORY_DIR.glob('*.json'))
+    if history_files:
+        latest_history_path = max(history_files, key=lambda path: path.stat().st_mtime_ns)
+        latest_history_file = latest_history_path.name
+        latest_history_mtime_ns = str(latest_history_path.stat().st_mtime_ns)
+        latest_history_modified_at = format_file_mtime(latest_history_path)
+        try:
+            latest_history_record = read_json(latest_history_path)
+            latest_history_effective_date = latest_history_record.get('price_result', {}).get('effective_price_date')
+        except Exception:
+            latest_history_effective_date = None
+
+    return {
+        'latest_prices_mtime_ns': latest_prices_mtime_ns,
+        'latest_prices_modified_at': latest_prices_modified_at,
+        'latest_price_history_file': latest_history_file,
+        'latest_price_history_mtime_ns': latest_history_mtime_ns,
+        'latest_price_history_modified_at': latest_history_modified_at,
+        'latest_price_effective_date': latest_catalog.get('effective_price_date') or latest_history_effective_date,
+        'latest_price_record_id': latest_catalog.get('record_id'),
+        'latest_price_sender': latest_catalog.get('sender'),
+    }
+
+
 def build_dashboard_state() -> Dict[str, Any]:
     pending_state = [
         {
@@ -124,11 +169,13 @@ def build_dashboard_state() -> Dict[str, Any]:
     latest_pending_id = pending_state[-1]['record_id'] if pending_state else None
     latest_approved = latest_record_state(APPROVED_DIR, timestamp_field='approved_at')
     latest_rejected = latest_record_state(REJECTED_DIR, timestamp_field='rejected_at')
+    price_state = build_price_state()
 
     fingerprint_source = {
         'pending': pending_state,
         'approved': latest_approved,
         'rejected': latest_rejected,
+        'prices': price_state,
     }
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_source, sort_keys=True, separators=(',', ':')).encode('utf-8')
@@ -140,6 +187,15 @@ def build_dashboard_state() -> Dict[str, Any]:
         'latest_pending_id': latest_pending_id,
         'latest_approved_id': latest_approved['record_id'],
         'latest_rejected_id': latest_rejected['record_id'],
+        'latest_prices_mtime_ns': price_state['latest_prices_mtime_ns'],
+        'latest_prices_modified_at': price_state['latest_prices_modified_at'],
+        'latest_price_history_file': price_state['latest_price_history_file'],
+        'latest_price_history_mtime_ns': price_state['latest_price_history_mtime_ns'],
+        'latest_price_history_modified_at': price_state['latest_price_history_modified_at'],
+        'latest_price_effective_date': price_state['latest_price_effective_date'],
+        'latest_price_record_id': price_state['latest_price_record_id'],
+        'latest_price_sender': price_state['latest_price_sender'],
+        'price_state': price_state,
     }
 
 
@@ -229,6 +285,7 @@ def index():
         queue=queue,
         approved_history=approved_history,
         rejected_history=rejected_history,
+        price_summary=dashboard_state['price_state'],
         dashboard_state=dashboard_state,
         dashboard_fingerprint=dashboard_state['fingerprint'],
     )

@@ -44,7 +44,7 @@ echo "Incoming folder path: $INCOMING_DIR"
 echo "Prices catalog path: $PRICES_CATALOG"
 echo ""
 echo "Starting review UI in background..."
-"$ROOT_DIR/scripts/start_review_ui.sh" >/data/logs/review_ui_stdout.log 2>&1 &
+"$ROOT_DIR/scripts/start_review_ui.sh" >""$ROOT_DIR/data/logs/review_ui_stdout.log"" 2>&1 &
 UI_PID=$!
 
 for _ in {1..30}; do

@@ -24,19 +24,37 @@ MATCH_FIXTURES = [
 ]
 
 
-def build_fixture_catalog(received_at: str) -> dict:
+def build_catalog(received_at: str, items: list[dict]) -> dict:
     return {
         'record_id': 'price_fixture_catalog',
         'received_at': received_at,
         'effective_price_date': '2026-03-06',
         'items': [
-            {'item_name': 'HK Kailan', 'normalized_item': 'HK Kailan', 'pack_text': '7kg', 'price_basis': 'CTN', 'reference_price': 32.0, 'effective_price_date': '2026-03-06', 'received_at': received_at},
-            {'item_name': 'Iceberg Lettuce', 'normalized_item': 'Iceberg Lettuce', 'pack_text': '10kg', 'price_basis': 'CTN', 'reference_price': 21.0, 'effective_price_date': '2026-03-06', 'received_at': received_at},
-            {'item_name': 'Spring Onion', 'normalized_item': 'Spring Onion', 'pack_text': None, 'price_basis': 'PKT', 'reference_price': 4.8, 'effective_price_date': '2026-03-06', 'received_at': received_at},
-            {'item_name': 'Red Capsicum', 'normalized_item': 'Red Capsicum', 'pack_text': None, 'price_basis': 'CTN', 'reference_price': 33.0, 'effective_price_date': '2026-03-06', 'received_at': received_at},
-            {'item_name': 'Sugar Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': '8kg', 'price_basis': 'CTN', 'reference_price': 18.5, 'effective_price_date': '2026-03-06', 'received_at': received_at},
+            {
+                'item_name': item['item_name'],
+                'normalized_item': item['normalized_item'],
+                'pack_text': item.get('pack_text'),
+                'price_basis': item.get('price_basis', 'CTN'),
+                'reference_price': item['reference_price'],
+                'effective_price_date': item.get('effective_price_date', '2026-03-06'),
+                'received_at': received_at,
+            }
+            for item in items
         ],
     }
+
+
+def build_fixture_catalog(received_at: str) -> dict:
+    return build_catalog(
+        received_at,
+        [
+            {'item_name': 'HK Kailan', 'normalized_item': 'HK Kailan', 'pack_text': '7kg', 'price_basis': 'CTN', 'reference_price': 32.0},
+            {'item_name': 'Iceberg Lettuce', 'normalized_item': 'Iceberg Lettuce', 'pack_text': '10kg', 'price_basis': 'CTN', 'reference_price': 21.0},
+            {'item_name': 'Spring Onion', 'normalized_item': 'Spring Onion', 'pack_text': None, 'price_basis': 'PKT', 'reference_price': 4.8},
+            {'item_name': 'Red Capsicum', 'normalized_item': 'Red Capsicum', 'pack_text': None, 'price_basis': 'CTN', 'reference_price': 33.0},
+            {'item_name': 'Sugar Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': '8kg', 'price_basis': 'CTN', 'reference_price': 18.5},
+        ],
+    )
 
 
 def main() -> None:
@@ -78,8 +96,85 @@ def main() -> None:
     if priced_items[1]['price'] != 9.9:
         raise SystemExit(f'Existing manual price was overwritten: {priced_items[1]["price"]}')
 
+    single_variant_catalog = build_catalog(
+        received_at,
+        [
+            {'item_name': 'Suger Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': '6kg', 'price_basis': 'CTN', 'reference_price': 28.0},
+        ],
+    )
+    single_variant_match, single_variant_confidence = find_reference_match(
+        {'item': 'Suger Tangerine', 'unit': 'CTN', 'weight': None, 'price': None, 'raw_line': 'Suger tangerine 10ctn'},
+        single_variant_catalog,
+    )
+    if not single_variant_match or single_variant_match.get('pack_text') != '6kg':
+        raise SystemExit('Single-variant fallback did not match the only available Sugar Tangerine price.')
+    if single_variant_confidence is None or single_variant_confidence < 0.86:
+        raise SystemExit(f'Single-variant fallback confidence too low: {single_variant_confidence}')
+
+    one_side_weight_only_catalog = build_catalog(
+        received_at,
+        [
+            {'item_name': 'Sugar Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': None, 'price_basis': 'CTN', 'reference_price': 24.0},
+        ],
+    )
+    one_side_only_match, _ = find_reference_match(
+        {'item': 'Sugar Tangerine', 'unit': 'CTN', 'weight': '10kg', 'price': None, 'raw_line': 'Sugar Tangerine 10kg 1 CTN'},
+        one_side_weight_only_catalog,
+    )
+    if not one_side_only_match or one_side_only_match.get('reference_price') != 24.0:
+        raise SystemExit('One-side-weight-only single-variant fallback did not match.')
+
+    multi_variant_catalog = build_catalog(
+        received_at,
+        [
+            {'item_name': 'Sugar Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': '6kg', 'price_basis': 'CTN', 'reference_price': 20.0},
+            {'item_name': 'Sugar Tangerine', 'normalized_item': 'Sugar Tangerine', 'pack_text': '10kg', 'price_basis': 'CTN', 'reference_price': 30.0},
+        ],
+    )
+    ambiguous_match, ambiguous_confidence = find_reference_match(
+        {'item': 'Sugar Tangerine', 'unit': 'CTN', 'weight': None, 'price': None, 'raw_line': 'Sugar Tangerine'},
+        multi_variant_catalog,
+    )
+    if ambiguous_match is not None or ambiguous_confidence is not None:
+        raise SystemExit('Ambiguous multi-variant catalog should not auto-match without order weight.')
+
+    exact_variant_match, exact_variant_confidence = find_reference_match(
+        {'item': 'Sugar Tangerine', 'unit': 'CTN', 'weight': '10kg', 'price': None, 'raw_line': 'Sugar Tangerine 10kg'},
+        multi_variant_catalog,
+    )
+    if not exact_variant_match or exact_variant_match.get('pack_text') != '10kg':
+        raise SystemExit('Exact weight variant did not match the 10kg Sugar Tangerine price.')
+    if exact_variant_confidence is None or exact_variant_confidence < 0.9:
+        raise SystemExit(f'Exact weight variant confidence too low: {exact_variant_confidence}')
+
+    ambiguous_items = [
+        {'item': 'Sugar Tangerine', 'unit': 'CTN', 'weight': None, 'price': None, 'raw_line': 'Sugar Tangerine 1 CTN'},
+    ]
+    apply_reference_prices(ambiguous_items, multi_variant_catalog)
+    if ambiguous_items[0]['price'] is not None or ambiguous_items[0]['reference_price'] is not None:
+        raise SystemExit('Ambiguous multi-variant order should not be auto-filled.')
+
     result['match_tests'] = match_results
     result['apply_reference_price_tests'] = priced_items
+    result['single_variant_fallback_test'] = {
+        'matched_item': single_variant_match.get('normalized_item'),
+        'matched_pack': single_variant_match.get('pack_text'),
+        'confidence': single_variant_confidence,
+    }
+    result['one_side_weight_only_test'] = {
+        'matched_item': one_side_only_match.get('normalized_item'),
+        'matched_pack': one_side_only_match.get('pack_text'),
+    }
+    result['multi_variant_ambiguous_test'] = {
+        'matched': ambiguous_match is not None,
+        'confidence': ambiguous_confidence,
+        'auto_filled_price': ambiguous_items[0]['price'],
+    }
+    result['multi_variant_exact_test'] = {
+        'matched_item': exact_variant_match.get('normalized_item'),
+        'matched_pack': exact_variant_match.get('pack_text'),
+        'confidence': exact_variant_confidence,
+    }
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
     print(json.dumps(result, indent=2, ensure_ascii=False))

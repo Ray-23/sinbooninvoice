@@ -112,6 +112,95 @@ def fuzzy_match_confidence(base_similarity: float, order_weight: Optional[str], 
     return clamp_confidence(score)
 
 
+def build_match_candidate(
+    entry: Dict[str, Any],
+    item_aliases: Dict[str, str],
+    order_key: str,
+    order_weight: Optional[str],
+    order_unit: str,
+) -> Optional[Dict[str, Any]]:
+    entry_name = str(entry.get('normalized_item') or entry.get('item_name') or '').strip()
+    normalized_entry_name = normalize_alias(entry_name, item_aliases) or entry_name
+    entry_key = canonical_item_key(normalized_entry_name)
+    if not entry_key:
+        return None
+
+    entry_pack = normalize_pack_text(entry.get('pack_text'))
+    entry_basis = str(entry.get('price_basis') or '').strip().upper()
+
+    if entry_key == order_key:
+        return {
+            'entry': entry,
+            'entry_key': entry_key,
+            'entry_pack': entry_pack,
+            'name_score': 1.0,
+            'confidence': exact_match_confidence(order_weight, order_unit, entry_pack, entry_basis),
+        }
+
+    base_similarity = similarity_ratio(order_key, entry_key)
+    if base_similarity < FUZZY_MATCH_THRESHOLD:
+        return None
+
+    confidence = fuzzy_match_confidence(base_similarity, order_weight, order_unit, entry_pack, entry_basis)
+    if confidence < FUZZY_MATCH_THRESHOLD:
+        return None
+
+    return {
+        'entry': entry,
+        'entry_key': entry_key,
+        'entry_pack': entry_pack,
+        'name_score': base_similarity,
+        'confidence': confidence,
+    }
+
+
+def select_item_name_group(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate['entry_key'], []).append(candidate)
+
+    ranked_groups = sorted(
+        grouped.values(),
+        key=lambda group: (
+            max(candidate['name_score'] for candidate in group),
+            max(candidate['confidence'] for candidate in group),
+            group[0]['entry_key'],
+        ),
+        reverse=True,
+    )
+    return ranked_groups[0]
+
+
+def select_variant_candidate(candidates: List[Dict[str, Any]], order_weight: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+    if not candidates:
+        return None, None
+
+    if len(candidates) == 1:
+        only_candidate = candidates[0]
+        return only_candidate['entry'], only_candidate['confidence']
+
+    if not order_weight:
+        return None, None
+
+    weight_matches = [candidate for candidate in candidates if candidate.get('entry_pack') == order_weight]
+    if not weight_matches:
+        return None, None
+
+    best_candidate = max(
+        weight_matches,
+        key=lambda candidate: (
+            candidate['confidence'],
+            str(candidate['entry'].get('effective_price_date') or ''),
+            str(candidate['entry'].get('received_at') or ''),
+            str(candidate['entry'].get('normalized_item') or candidate['entry'].get('item_name') or ''),
+        ),
+    )
+    return best_candidate['entry'], best_candidate['confidence']
+
+
 def parse_effective_price_date(header_line: str, received_at: str) -> str:
     match = DATE_LINE_RE.match(header_line or '')
     if not match:
@@ -253,46 +342,18 @@ def find_reference_match(item_row: Dict[str, Any], catalog: Dict[str, Any]) -> T
 
     order_weight = normalize_pack_text(item_row.get('weight'))
     order_unit = str(item_row.get('unit') or '').strip().upper()
-    exact_candidates: List[Tuple[float, Dict[str, Any]]] = []
-    fuzzy_candidates: List[Tuple[float, Dict[str, Any]]] = []
+    candidates: List[Dict[str, Any]] = []
 
     for entry in catalog.get('items', []):
-        entry_name = str(entry.get('normalized_item') or entry.get('item_name') or '').strip()
-        normalized_entry_name = normalize_alias(entry_name, item_aliases) or entry_name
-        entry_key = canonical_item_key(normalized_entry_name)
-        if not entry_key:
-            continue
+        candidate = build_match_candidate(entry, item_aliases, order_key, order_weight, order_unit)
+        if candidate:
+            candidates.append(candidate)
 
-        entry_pack = normalize_pack_text(entry.get('pack_text'))
-        entry_basis = str(entry.get('price_basis') or '').strip().upper()
-
-        if entry_key == order_key:
-            exact_candidates.append((exact_match_confidence(order_weight, order_unit, entry_pack, entry_basis), entry))
-            continue
-
-        base_similarity = similarity_ratio(order_key, entry_key)
-        if base_similarity < FUZZY_MATCH_THRESHOLD:
-            continue
-
-        confidence = fuzzy_match_confidence(base_similarity, order_weight, order_unit, entry_pack, entry_basis)
-        if confidence < FUZZY_MATCH_THRESHOLD:
-            continue
-        fuzzy_candidates.append((confidence, entry))
-
-    candidates = exact_candidates or fuzzy_candidates
-    if not candidates:
+    matched_item_group = select_item_name_group(candidates)
+    if not matched_item_group:
         return None, None
 
-    best_score, best_match = max(
-        candidates,
-        key=lambda pair: (
-            pair[0],
-            str(pair[1].get('effective_price_date') or ''),
-            str(pair[1].get('received_at') or ''),
-            str(pair[1].get('normalized_item') or pair[1].get('item_name') or ''),
-        ),
-    )
-    return best_match, best_score
+    return select_variant_candidate(matched_item_group, order_weight)
 
 
 def apply_reference_prices(items: List[Dict[str, Any]], catalog: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

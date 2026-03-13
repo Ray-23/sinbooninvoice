@@ -2,8 +2,7 @@
 
 # Environment files
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
 
 # Python
@@ -28,3 +27,4 @@ data/logs/
 data/incoming/
 data/approved/
 data/rejected/
+data/prices/

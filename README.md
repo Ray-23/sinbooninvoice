@@ -2,14 +2,15 @@
 
 A low-cost local prototype for this pipeline:
 
-**WhatsApp group -> parser -> review UI -> approved JSON/CSV**
+**WhatsApp order group + WhatsApp price group -> parser -> review UI -> approved JSON/CSV**
 
 This phase is intentionally limited to the MacBook prototype. It does **not** automate SQL Enterprise.
 
 ## Stack
 
 - **WhatsApp listener:** Node.js + Baileys
-- **Parser:** Python rule-based parser
+- **Order parser:** Python rule-based parser
+- **Price parser:** Python rule-based parser
 - **Review UI:** Flask web app
 - **Storage:** local JSON / CSV files
 - **Logs:** local log files in `data/logs/`
@@ -18,16 +19,16 @@ This phase is intentionally limited to the MacBook prototype. It does **not** au
 
 ### Project purpose
 
-This repo is a MacBook prototype for capturing WhatsApp group orders, parsing them into structured order rows, and sending them through a local review UI before export.
+This repo captures order messages from the `SinboonInvoice` WhatsApp group, captures price-list messages from the `SinboonPrice` WhatsApp group, parses both locally, and lets an operator review orders with the latest price reference visible on each row before approval or rejection.
 
 ### Folder structure
 
 - `listener/`: live WhatsApp listener, QR auth session handling, and Node dependencies
-- `parser/`: rule-based order parsing logic and parser test harness
-- `review_ui/`: Flask review interface for pending orders
-- `scripts/`: helper scripts for install, startup, demo ingest, and preflight checks
+- `parser/`: order parsing, price parsing, and parser test harnesses
+- `review_ui/`: Flask review interface for pending orders and history panels
+- `scripts/`: install, startup, preflight, and demo fixtures for the MacBook flow
 - `data/mappings/`: committed sample alias mappings used by the parser
-- `data/incoming/`, `data/approved/`, `data/rejected/`, `data/logs/`: local generated runtime data, intentionally ignored by Git
+- `data/incoming/`, `data/approved/`, `data/rejected/`, `data/logs/`, `data/prices/`: local generated runtime data, intentionally ignored by Git
 
 ### Startup commands
 
@@ -37,28 +38,25 @@ bash scripts/install_listener_mac.sh
 cp .env.example .env
 ```
 
-Set the exact WhatsApp group name in `.env`, then run:
+Set the group names in `.env`, then use the one-terminal startup:
 
 ```bash
 cd ~/order-bot
-./scripts/start_review_ui.sh
+./scripts/start_all_mac.sh
 ```
 
-In a second terminal:
-
-```bash
-cd ~/order-bot
-./scripts/start_listener.sh
-```
+That starts Flask in the background, waits for `http://127.0.0.1:5001`, opens Google Chrome, and keeps the WhatsApp listener in the foreground so the QR code remains visible.
 
 ### What is already working
 
-- Python parser test mode
-- demo ingest from sample text
-- Flask review UI for pending messages
-- local approve/reject flow with JSON and CSV output generation
-- Mac helper scripts for install, preflight, review UI startup, and WhatsApp listener startup
-- WhatsApp listener with QR login, target-group filtering, and ingestion into `data/incoming/`
+- dual-group WhatsApp listener for orders and price messages
+- QR login with local Baileys auth state
+- order parsing into pending review records
+- price parsing into raw history snapshots and a latest price catalog
+- automatic order-row reference pricing from `data/prices/latest_prices.json`
+- Flask review UI with pending queue plus latest 10 approved and rejected panels
+- local approve/reject flow with JSON, CSV, and raw-message archive output
+- Mac helper scripts for install, preflight, listener startup, review UI startup, and all-in-one startup
 
 ### What is not yet implemented
 
@@ -75,42 +73,73 @@ order-bot/
   listener/
     index.mjs
     package.json
-    auth_info_baileys/        # created after first QR login
+    auth_info_baileys/        # created after first QR login, ignored by git
   parser/
     __init__.py
     order_parser.py
+    price_parser.py
     test_parser.py
+    test_price_parser.py
   review_ui/
     app.py
     templates/
       index.html
       review.html
   data/
-    incoming/
-    approved/
+    incoming/                 # ignored by git
+    approved/                 # ignored by git
       raw_messages/
-    rejected/
+    rejected/                 # ignored by git
       raw_messages/
-    logs/
+    prices/                   # ignored by git
+      raw/
+      history/
+      latest_prices.json
+    logs/                     # ignored by git
     mappings/
       customers.json
       items.json
   scripts/
     ingest_message.py
-    demo_ingest.sh
+    install_listener_mac.sh
+    preflight_listener_mac.sh
+    start_listener.sh
+    start_review_ui.sh
+    start_all_mac.sh
     sample_order.txt
+    sample_price_message.txt
   requirements.txt
   README.md
 ```
 
+## Environment configuration
+
+Preferred keys:
+
+```bash
+ORDER_GROUP_NAME="SinboonInvoice"
+PRICE_GROUP_NAME="SinboonPrice"
+```
+
+Backward compatibility:
+
+```bash
+TARGET_GROUP_NAME="SinboonInvoice"
+```
+
+`ORDER_GROUP_NAME` takes precedence over `TARGET_GROUP_NAME` if both are present.
+
 ## What gets saved where
 
-- **Pending incoming messages:** `data/incoming/*.json`
+- **Pending incoming orders:** `data/incoming/*.json`
 - **Approved order JSON:** `data/approved/*.json`
 - **Approved order CSV:** `data/approved/*.csv`
 - **Approved raw text archive:** `data/approved/raw_messages/*.txt`
 - **Rejected records:** `data/rejected/*.json`
 - **Rejected raw text archive:** `data/rejected/raw_messages/*.txt`
+- **Price raw message archive:** `data/prices/raw/*.txt`
+- **Price parsed history snapshots:** `data/prices/history/*.json`
+- **Latest price catalog:** `data/prices/latest_prices.json`
 - **Runtime logs:** `data/logs/app.log`, `data/logs/listener.log`
 - **Index logs:** `data/logs/incoming_index.csv`, `data/logs/review_actions.csv`
 - **WhatsApp QR/session auth:** `listener/auth_info_baileys/`
@@ -120,7 +149,7 @@ order-bot/
 ### 1) Python side
 
 ```bash
-cd order-bot
+cd ~/order-bot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -129,32 +158,38 @@ pip install -r requirements.txt
 ### 2) Node listener side
 
 ```bash
-cd order-bot/listener
+cd ~/order-bot/listener
 npm install
+```
+
+### 3) Quick install helper
+
+```bash
+cd ~/order-bot
+bash scripts/install_listener_mac.sh
 ```
 
 ## Run commands
 
-### Parser test mode
+### Order parser test mode
 
 ```bash
-cd order-bot
+cd ~/order-bot
 python3 -m parser.test_parser
 ```
 
-### Demo ingest (creates a pending review record from sample text)
+### Price parser test mode
 
 ```bash
-cd order-bot
-./scripts/demo_ingest.sh
+cd ~/order-bot
+python3 -m parser.test_price_parser
 ```
 
-### Review UI
+### Review UI only
 
 ```bash
-cd order-bot
-source .venv/bin/activate
-python3 review_ui/app.py
+cd ~/order-bot
+./scripts/start_review_ui.sh
 ```
 
 Open:
@@ -163,47 +198,46 @@ Open:
 http://127.0.0.1:5001
 ```
 
-### WhatsApp listener
+### WhatsApp listener only
 
 ```bash
-cd order-bot/listener
-TARGET_GROUP_NAME="YOUR GROUP NAME" npm start
+cd ~/order-bot
+./scripts/start_listener.sh
+```
+
+### One-terminal startup
+
+```bash
+cd ~/order-bot
+./scripts/start_all_mac.sh
 ```
 
 On first run, scan the QR code shown in the terminal with WhatsApp on your phone.
 
-## Parser rules implemented
+## Price reference rules
 
-- First meaningful line may be treated as the customer name
-- Default unit is `CTN` if missing
-- Supported units: `CTN`, `BAG`, `BOX`, `PKT`, `PCS`, `KG`, `JAR`
-- Handles weights like `7kg` or `20kg`
-- Handles prices like `$58`
-- Ignores numbering like `1)` and `2)`
-- Tolerates messy spacing and common WhatsApp formatting
-- Saves `raw_line` for every parsed row
+- Price messages are read from `SinboonPrice`
+- The first line must start with a date such as `6/3china container arrival`
+- The effective price date is parsed as **DD/MM/current-year** unless the year is explicitly present
+- Product lines default to **CTN** unless the line explicitly says `/pkt`, `/kg`, `/pcs`, or another supported basis
+- Raw price text is preserved for audit in `data/prices/raw/`
+- Parsed history is preserved in `data/prices/history/`
+- `data/prices/latest_prices.json` is replaced only when the incoming price message has:
+  1. a newer effective price date, or
+  2. the same effective price date but a later received timestamp
 
 ## Manual flow for this prototype
 
-1. Start Flask review UI
-2. Start WhatsApp listener with the exact target group name
-3. Scan QR on first run
-4. Incoming messages from that group are parsed and saved into `data/incoming/`
-5. Open review UI, edit if needed, then approve or reject
-6. Approved records produce JSON + CSV outputs
-
-## What still needs to be done later on the Windows office PC
-
-1. Replace the final approved-output step with SQL Enterprise automation
-2. Add office-PC-specific Firebird / SQL workflow
-3. Add production-grade item/customer alias tables from your real customer data
-4. Add stronger duplicate detection and message threading
-5. Add better handling for multi-message orders split across several WhatsApp posts
-6. Add Windows service or scheduled startup for always-on runtime
-7. Add backup / recovery handling for session and approved data
+1. Start everything with `./scripts/start_all_mac.sh`
+2. Scan QR on first run
+3. Price messages from `SinboonPrice` update `data/prices/latest_prices.json`
+4. Order messages from `SinboonInvoice` are parsed into `data/incoming/`
+5. Open the review UI, inspect the reference prices beside each item row, then save, approve, or reject
+6. Approved records produce JSON + CSV outputs and rejected records are archived separately
 
 ## Notes
 
 - This is a **prototype** for proving the pipeline cheaply.
-- Baileys auth is local to this machine in `listener/auth_info_baileys/`.
+- Baileys auth is local to this machine in `listener/auth_info_baileys/` and is ignored by Git.
+- Runtime data under `data/` is local-only and ignored by Git.
 - For later migration, keep the parser and review UI logic mostly unchanged and replace only the final approved-output stage.

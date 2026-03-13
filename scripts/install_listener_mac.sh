@@ -5,6 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "Installing Order Bot dependencies in: $ROOT_DIR"
 
+mkdir -p \
+  "$ROOT_DIR/data/incoming" \
+  "$ROOT_DIR/data/approved" \
+  "$ROOT_DIR/data/rejected" \
+  "$ROOT_DIR/data/logs" \
+  "$ROOT_DIR/data/prices/raw" \
+  "$ROOT_DIR/data/prices/history"
+
 cd "$ROOT_DIR"
 python3 -m venv .venv
 source .venv/bin/activate
@@ -16,5 +24,6 @@ npm install
 
 echo ""
 echo "Install complete."
-echo "Review UI: $ROOT_DIR/scripts/start_review_ui.sh"
-echo "Listener:  $ROOT_DIR/scripts/start_listener.sh \"YOUR GROUP NAME\""
+echo "Review UI:  $ROOT_DIR/scripts/start_review_ui.sh"
+echo "Listener:   $ROOT_DIR/scripts/start_listener.sh \"ORDER GROUP\" \"PRICE GROUP\""
+echo "All-in-one: $ROOT_DIR/scripts/start_all_mac.sh"

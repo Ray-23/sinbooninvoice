@@ -10,11 +10,17 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-TARGET_GROUP_NAME="${1:-${TARGET_GROUP_NAME:-}}"
+ORDER_GROUP_NAME="${1:-${ORDER_GROUP_NAME:-${TARGET_GROUP_NAME:-}}}"
+PRICE_GROUP_NAME="${2:-${PRICE_GROUP_NAME:-}}"
 
-"$ROOT_DIR/scripts/preflight_listener_mac.sh" "$TARGET_GROUP_NAME"
+"$ROOT_DIR/scripts/preflight_listener_mac.sh" "$ORDER_GROUP_NAME" "$PRICE_GROUP_NAME"
 
 cd "$ROOT_DIR/listener"
 echo ""
-echo "Starting WhatsApp listener for group: $TARGET_GROUP_NAME"
-TARGET_GROUP_NAME="$TARGET_GROUP_NAME" npm start
+echo "Starting WhatsApp listener"
+echo "Order group: $ORDER_GROUP_NAME"
+echo "Price group: $PRICE_GROUP_NAME"
+ORDER_GROUP_NAME="$ORDER_GROUP_NAME" \
+PRICE_GROUP_NAME="$PRICE_GROUP_NAME" \
+TARGET_GROUP_NAME="$ORDER_GROUP_NAME" \
+npm start

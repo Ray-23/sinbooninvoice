@@ -18,18 +18,22 @@ const authDir = path.join(__dirname, 'auth_info_baileys');
 const dataDir = path.join(rootDir, 'data');
 const logDir = path.join(dataDir, 'logs');
 const incomingDir = path.join(dataDir, 'incoming');
+const latestPricesPath = path.join(dataDir, 'prices', 'latest_prices.json');
 fs.mkdirSync(authDir, { recursive: true });
 fs.mkdirSync(logDir, { recursive: true });
 fs.mkdirSync(incomingDir, { recursive: true });
 
-const targetGroupName = process.env.TARGET_GROUP_NAME || '';
-if (!targetGroupName) {
-  console.error('Missing TARGET_GROUP_NAME. Example: TARGET_GROUP_NAME="Veg Orders" npm start');
+const orderGroupName = process.env.ORDER_GROUP_NAME || process.env.TARGET_GROUP_NAME || '';
+const priceGroupName = process.env.PRICE_GROUP_NAME || '';
+const watchedGroups = [orderGroupName, priceGroupName].filter(Boolean);
+if (!orderGroupName || !priceGroupName) {
+  console.error('Missing ORDER_GROUP_NAME and/or PRICE_GROUP_NAME.');
+  console.error('Example: ORDER_GROUP_NAME="SinboonInvoice" PRICE_GROUP_NAME="SinboonPrice" npm start');
   process.exit(1);
 }
 
 const logger = P({ level: 'info' }, P.destination(path.join(logDir, 'listener.log')));
-let targetGroupFound = false;
+let missingGroupNames = new Set();
 
 function extractText(message) {
   if (!message) return '';
@@ -43,9 +47,32 @@ function extractText(message) {
   ).trim();
 }
 
-function ingestMessage({ chatId, groupName, sender, messageId, text }) {
+function parseChildOutput(stdout) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function ingestMessage({ messageType, chatId, groupName, sender, messageId, text }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('python3', [path.join(rootDir, 'scripts', 'ingest_message.py'), '--stdin', '--source', 'whatsapp', '--chat-id', chatId, '--group-name', groupName, '--sender', sender || '', '--message-id', messageId || ''], {
+    const child = spawn('python3', [
+      path.join(rootDir, 'scripts', 'ingest_message.py'),
+      '--stdin',
+      '--source',
+      'whatsapp',
+      '--message-type',
+      messageType,
+      '--chat-id',
+      chatId,
+      '--group-name',
+      groupName,
+      '--sender',
+      sender || '',
+      '--message-id',
+      messageId || '',
+    ], {
       cwd: rootDir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -56,10 +83,11 @@ function ingestMessage({ chatId, groupName, sender, messageId, text }) {
     child.stderr.on('data', (buf) => { stderr += buf.toString(); });
     child.on('close', (code) => {
       if (code === 0) {
-        logger.info({ event: 'ingested', chatId, groupName, messageId, stdout });
-        resolve(stdout);
+        const parsedOutput = parseChildOutput(stdout);
+        logger.info({ event: 'ingested', messageType, chatId, groupName, messageId, stdout: parsedOutput || stdout });
+        resolve({ stdout, parsedOutput });
       } else {
-        logger.error({ event: 'ingest_failed', chatId, groupName, messageId, stderr, code });
+        logger.error({ event: 'ingest_failed', messageType, chatId, groupName, messageId, stderr, code });
         reject(new Error(stderr || `Ingest failed with code ${code}`));
       }
     });
@@ -80,29 +108,39 @@ async function refreshGroups(sock) {
 
 function printStartupBanner() {
   console.log('Order Bot WhatsApp Listener');
-  console.log(`Target group: ${targetGroupName}`);
+  console.log(`Order group: ${orderGroupName}`);
+  console.log(`Price group: ${priceGroupName}`);
   console.log(`Incoming files: ${incomingDir}`);
+  console.log(`Latest prices catalog: ${latestPricesPath}`);
   console.log(`Session/auth files: ${authDir}`);
   console.log(`Listener log: ${path.join(logDir, 'listener.log')}`);
   console.log('');
 }
 
-async function verifyTargetGroup(sock) {
+async function verifyTargetGroups(sock) {
   const groups = await refreshGroups(sock);
-  const matchedEntry = Object.entries(groups).find(([, group]) => group?.subject === targetGroupName);
+  const availableGroupNames = new Set(Object.values(groups).map((group) => group?.subject).filter(Boolean));
+  const missingNames = watchedGroups.filter((groupName) => !availableGroupNames.has(groupName));
 
-  if (!matchedEntry) {
-    if (!targetGroupFound) {
-      console.error(`Target group not found: "${targetGroupName}"`);
-      console.error('Open WhatsApp on your phone, confirm the group name matches exactly, then wait for sync or restart the listener.');
+  if (missingNames.length > 0) {
+    for (const groupName of missingNames) {
+      if (!missingGroupNames.has(groupName)) {
+        console.error(`Target group not found: "${groupName}"`);
+      }
     }
-    targetGroupFound = false;
-    logger.error({ event: 'target_group_not_found', targetGroupName });
-    return groups;
+    if (missingNames.some((groupName) => !missingGroupNames.has(groupName))) {
+      console.error('Open WhatsApp on your phone, confirm both group names match exactly, then wait for sync or restart the listener.');
+    }
+    missingGroupNames = new Set(missingNames);
+    logger.error({ event: 'target_groups_missing', missingNames, watchedGroups });
+  } else {
+    if (missingGroupNames.size > 0) {
+      console.log('All configured WhatsApp groups are now available.');
+    }
+    missingGroupNames = new Set();
+    logger.info({ event: 'target_groups_found', watchedGroups });
   }
 
-  targetGroupFound = true;
-  logger.info({ event: 'target_group_found', targetGroupName, chatId: matchedEntry[0] });
   return groups;
 }
 
@@ -132,9 +170,10 @@ async function connect() {
 
     if (connection === 'open') {
       console.log('WhatsApp connection established.');
-      console.log(`Watching for messages from: ${targetGroupName}`);
-      logger.info({ event: 'connected', targetGroupName });
-      void verifyTargetGroup(sock);
+      console.log(`Watching order group: ${orderGroupName}`);
+      console.log(`Watching price group: ${priceGroupName}`);
+      logger.info({ event: 'connected', orderGroupName, priceGroupName });
+      void verifyTargetGroups(sock);
     }
 
     if (connection === 'close') {
@@ -148,25 +187,44 @@ async function connect() {
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
-    const groups = await verifyTargetGroup(sock);
+    const groups = await verifyTargetGroups(sock);
 
     for (const msg of messages) {
       try {
         if (!msg.key?.remoteJid?.endsWith('@g.us')) continue;
         const chatId = msg.key.remoteJid;
         const groupName = groups?.[chatId]?.subject || '';
-        if (groupName !== targetGroupName) continue;
+        if (!watchedGroups.includes(groupName)) continue;
 
         const text = extractText(msg.message);
         if (!text) continue;
 
+        const messageType = groupName === priceGroupName ? 'price' : 'order';
         const sender = msg.pushName || msg.key.participant || 'Unknown';
-        console.log(`Captured WhatsApp message from "${groupName}"`);
+        console.log(`Captured WhatsApp ${messageType} message from "${groupName}"`);
         console.log(`Sender: ${sender}`);
         console.log(`Message ID: ${msg.key.id || 'unknown'}`);
-        logger.info({ event: 'message_received', chatId, groupName, sender, messageId: msg.key.id });
-        await ingestMessage({ chatId, groupName, sender, messageId: msg.key.id, text });
-        console.log(`Saved pending review file under: ${incomingDir}`);
+        logger.info({ event: 'message_received', messageType, chatId, groupName, sender, messageId: msg.key.id });
+
+        const { parsedOutput } = await ingestMessage({
+          messageType,
+          chatId,
+          groupName,
+          sender,
+          messageId: msg.key.id,
+          text,
+        });
+
+        if (messageType === 'price') {
+          console.log(`Saved price raw message under: ${parsedOutput?.saved_raw_to || path.join(dataDir, 'prices', 'raw')}`);
+          console.log(`Saved price history snapshot under: ${parsedOutput?.saved_history_to || path.join(dataDir, 'prices', 'history')}`);
+          console.log(`Latest price catalog: ${parsedOutput?.latest_catalog_path || latestPricesPath}`);
+          if (parsedOutput?.latest_catalog_updated === false) {
+            console.log('Latest price catalog was not replaced because a newer price snapshot already exists.');
+          }
+        } else {
+          console.log(`Saved pending review file under: ${parsedOutput?.saved_to || incomingDir}`);
+        }
       } catch (error) {
         logger.error({ event: 'message_process_error', error: String(error) });
         console.error('Failed to process message:', error.message || error);

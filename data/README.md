@@ -8,5 +8,6 @@ The following directories are generated locally at runtime and are intentionally
 - `data/approved/`
 - `data/rejected/`
 - `data/logs/`
+- `data/prices/`
 
-These folders will be created and used by the parser, review UI, and WhatsApp listener on the operator's machine.
+These folders will be created and used by the parser, review UI, WhatsApp listener, and price-catalog workflow on the operator's machine.

@@ -240,7 +240,24 @@ def update_from_form(record: Dict[str, Any], form_data) -> Dict[str, Any]:
 def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', newline='', encoding='utf-8') as fh:
-        writer = csv.DictWriter(fh, fieldnames=['customer', 'item', 'quantity', 'unit', 'weight', 'price', 'raw_line'])
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                'customer',
+                'item',
+                'quantity',
+                'unit',
+                'weight',
+                'price',
+                'raw_line',
+                'reference_price_item',
+                'reference_price',
+                'reference_price_basis',
+                'reference_price_date',
+                'price_match_confidence',
+            ],
+            extrasaction='ignore',
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
